@@ -2,36 +2,16 @@ variable "env" {
   default = "staging"
 }
 
-variable "gce_gcloud_zone" {}
-variable "gce_heroku_org" {}
-variable "github_users" {}
-
 variable "index" {
   default = 1
 }
 
-variable "job_board_url" {}
-variable "latest_docker_image_worker" {}
+variable "k8s_default_namespace" {
+  default = "default"
+}
 
 variable "project" {
   default = "travis-staging-1"
-}
-
-variable "syslog_address_com" {}
-variable "syslog_address_org" {}
-
-variable "travisci_net_external_zone_id" {
-  default = "Z2RI61YP4UWSIO"
-}
-
-variable "warmer_honeycomb_write_key" {}
-
-variable "warmer_version" {
-  default = "master"
-}
-
-variable "worker_zones" {
-  default = ["a", "b", "c", "f"]
 }
 
 terraform {
@@ -50,7 +30,17 @@ provider "google" {
 }
 
 provider "aws" {}
-provider "heroku" {}
+
+provider "kubernetes" {
+  # NOTE: For imports, config_context needs to be hardcoded and host/client/cluster needs to be commented out.
+
+  #config_context = "gke_travis-staging-1_us-central1-a_workers-1"
+
+  host                   = "${module.workers_1.host}"
+  client_certificate     = "${module.workers_1.client_certificate}"
+  client_key             = "${module.workers_1.client_key}"
+  cluster_ca_certificate = "${module.workers_1.cluster_ca_certificate}"
+}
 
 data "terraform_remote_state" "vpc" {
   backend = "s3"
@@ -80,94 +70,61 @@ module "aws_iam_user_s3_org" {
 module "gce_worker_group" {
   source = "../modules/gce_worker_group"
 
-  env                                       = "${var.env}"
-  gcloud_cleanup_job_board_url              = "${var.job_board_url}"
-  gcloud_cleanup_loop_sleep                 = "2m"
-  gcloud_cleanup_scale                      = "worker=1:standard-1X"
-  gcloud_cleanup_opencensus_sampling_rate   = "4"
-  gcloud_cleanup_opencensus_tracing_enabled = "true"
-  gcloud_zone                               = "${var.gce_gcloud_zone}"
-  github_users                              = "${var.github_users}"
-  heroku_org                                = "${var.gce_heroku_org}"
-  honeycomb_key                             = "${var.warmer_honeycomb_write_key}"
-  index                                     = "${var.index}"
-  project                                   = "${var.project}"
-  region                                    = "us-central1"
-  syslog_address_com                        = "${var.syslog_address_com}"
-  syslog_address_org                        = "${var.syslog_address_org}"
-  travisci_net_external_zone_id             = "${var.travisci_net_external_zone_id}"
-
-  warmer_version = "${var.warmer_version}"
-
-  worker_docker_self_image = "${var.latest_docker_image_worker}"
-  worker_subnetwork        = "${data.terraform_remote_state.vpc.gce_subnetwork_workers}"
-
-  worker_zones = "${var.worker_zones}"
-
-  worker_managed_instance_count_com      = "${length(var.worker_zones)}"
-  worker_managed_instance_count_com_free = 0
-  worker_managed_instance_count_org      = "${length(var.worker_zones)}"
-
-  worker_config_com = <<EOF
-### worker.env
-${file("${path.module}/worker.env")}
-### config/worker-com.env
-${file("${path.module}/config/worker-com.env")}
-
-export TRAVIS_WORKER_GCE_SUBNETWORK=jobs-com
-export TRAVIS_WORKER_HARD_TIMEOUT=120m
-export TRAVIS_WORKER_QUEUE_NAME=builds.gce
-export TRAVIS_WORKER_TRAVIS_SITE=com
-
-export TRAVIS_WORKER_BUILD_TRACE_S3_BUCKET=${module.aws_iam_user_s3_com.bucket}
-export AWS_ACCESS_KEY_ID=${module.aws_iam_user_s3_com.id}
-export AWS_SECRET_ACCESS_KEY=${module.aws_iam_user_s3_com.secret}
-EOF
-
-  worker_config_com_free = <<EOF
-### worker.env
-${file("${path.module}/worker.env")}
-### config/worker-com.env
-${file("${path.module}/config/worker-com.env")}
-
-export TRAVIS_WORKER_QUEUE_NAME=builds.gce-free
-export TRAVIS_WORKER_GCE_SUBNETWORK=jobs-com
-export TRAVIS_WORKER_HARD_TIMEOUT=120m
-export TRAVIS_WORKER_TRAVIS_SITE=com
-
-export TRAVIS_WORKER_BUILD_TRACE_S3_BUCKET=${module.aws_iam_user_s3_com.bucket}
-export AWS_ACCESS_KEY_ID=${module.aws_iam_user_s3_com.id}
-export AWS_SECRET_ACCESS_KEY=${module.aws_iam_user_s3_com.secret}
-EOF
-
-  worker_config_org = <<EOF
-### worker.env
-${file("${path.module}/worker.env")}
-### config/worker-org.env
-${file("${path.module}/config/worker-org.env")}
-
-export TRAVIS_WORKER_QUEUE_NAME=builds.gce
-export TRAVIS_WORKER_GCE_SUBNETWORK=jobs-org
-export TRAVIS_WORKER_TRAVIS_SITE=org
-
-export TRAVIS_WORKER_BUILD_TRACE_S3_BUCKET=${module.aws_iam_user_s3_org.bucket}
-export AWS_ACCESS_KEY_ID=${module.aws_iam_user_s3_org.id}
-export AWS_SECRET_ACCESS_KEY=${module.aws_iam_user_s3_org.secret}
-EOF
+  aws_com_id            = "${module.aws_iam_user_s3_com.id}"
+  aws_com_secret        = "${module.aws_iam_user_s3_com.secret}"
+  aws_com_trace_bucket  = "${module.aws_iam_user_s3_com.bucket}"
+  aws_org_id            = "${module.aws_iam_user_s3_org.id}"
+  aws_org_secret        = "${module.aws_iam_user_s3_org.secret}"
+  aws_org_trace_bucket  = "${module.aws_iam_user_s3_org.bucket}"
+  env                   = "${var.env}"
+  index                 = "${var.index}"
+  k8s_default_namespace = "${var.k8s_default_namespace}"
+  project               = "${var.project}"
+  region                = "us-central1"
 }
 
-module "gke_staging_cluster_1" {
-  source = "../modules/gke_cluster"
+module "workers_1" {
+  source = "../modules/gce_kubernetes"
+
+  cluster_name      = "workers-1"
+  default_namespace = "${var.k8s_default_namespace}"
+  network           = "${data.terraform_remote_state.vpc.gce_network_main}"
+  pool_name         = "default"
+  project           = "${var.project}"
+  region            = "us-central1"
+  subnetwork        = "${data.terraform_remote_state.vpc.gce_subnetwork_gke_cluster}"
+
+  node_locations     = ["us-central1-b", "us-central1-c"]
+  node_pool_tags     = ["gce-workers"]
+  max_node_count     = 10
+  machine_type       = "c2-standard-4"
+  min_master_version = "1.14"
+}
+
+// Use these outputs to be able to easily set up a context in kubectl on the local machine.
+output "cluster_host" {
+  value = "${module.workers_1.host}"
+}
+
+output "cluster_ca_certificate" {
+  value     = "${module.workers_1.cluster_ca_certificate}"
+  sensitive = true
+}
+
+output "client_certificate" {
+  value     = "${module.workers_1.client_certificate}"
+  sensitive = true
+}
+
+output "client_key" {
+  value     = "${module.workers_1.client_key}"
+  sensitive = true
+}
+
+output "context" {
+  value = "${module.workers_1.context}"
 }
 
 output "workers_service_account_emails" {
   value = ["${module.gce_worker_group.workers_service_account_emails}"]
-}
-
-output "warmer_service_account_emails" {
-  value = ["${module.gce_worker_group.warmer_service_account_emails}"]
-}
-
-output "latest_docker_image_worker" {
-  value = "${var.latest_docker_image_worker}"
 }

@@ -2,33 +2,17 @@ variable "env" {
   default = "production"
 }
 
-variable "gce_gcloud_zone" {}
-variable "gce_heroku_org" {}
-
-variable "github_users" {}
-
 variable "index" {
   default = 1
 }
 
-variable "job_board_url" {}
+variable "k8s_default_namespace" {
+  default = "gce-production-1"
+}
 
 variable "project" {
   default = "eco-emissary-99515"
 }
-
-variable "syslog_address_com" {}
-variable "syslog_address_org" {}
-
-variable "travisci_net_external_zone_id" {
-  default = "Z2RI61YP4UWSIO"
-}
-
-variable "warmer_honeycomb_write_key" {}
-
-variable "worker_managed_instance_count_com" {}
-variable "worker_managed_instance_count_org" {}
-variable "worker_managed_instance_count_com_free" {}
 
 terraform {
   backend "s3" {
@@ -46,7 +30,10 @@ provider "google" {
 }
 
 provider "aws" {}
-provider "heroku" {}
+
+provider "kubernetes" {
+  config_context = "${module.gke_cluster_1.context}"
+}
 
 data "terraform_remote_state" "vpc" {
   backend = "s3"
@@ -54,28 +41,6 @@ data "terraform_remote_state" "vpc" {
   config {
     bucket         = "travis-terraform-state"
     key            = "terraform-config/gce-production-net-1.tfstate"
-    region         = "us-east-1"
-    dynamodb_table = "travis-terraform-state"
-  }
-}
-
-data "terraform_remote_state" "staging_1" {
-  backend = "s3"
-
-  config {
-    bucket         = "travis-terraform-state"
-    key            = "terraform-config/gce-staging-1.tfstate"
-    region         = "us-east-1"
-    dynamodb_table = "travis-terraform-state"
-  }
-}
-
-data "terraform_remote_state" "production_2" {
-  backend = "s3"
-
-  config {
-    bucket         = "travis-terraform-state"
-    key            = "terraform-config/gce-production-2.tfstate"
     region         = "us-east-1"
     dynamodb_table = "travis-terraform-state"
   }
@@ -98,99 +63,70 @@ module "aws_iam_user_s3_org" {
 module "gce_worker_group" {
   source = "../modules/gce_worker_group"
 
-  env                                       = "${var.env}"
-  gcloud_cleanup_job_board_url              = "${var.job_board_url}"
-  gcloud_cleanup_opencensus_sampling_rate   = "10"
-  gcloud_cleanup_opencensus_tracing_enabled = "true"
-  gcloud_zone                               = "${var.gce_gcloud_zone}"
-  github_users                              = "${var.github_users}"
-  heroku_org                                = "${var.gce_heroku_org}"
-  honeycomb_key                             = "${var.warmer_honeycomb_write_key}"
-  index                                     = "${var.index}"
-  project                                   = "${var.project}"
-  region                                    = "us-central1"
-  syslog_address_com                        = "${var.syslog_address_com}"
-  syslog_address_org                        = "${var.syslog_address_org}"
-  travisci_net_external_zone_id             = "${var.travisci_net_external_zone_id}"
-
-  worker_subnetwork = "${data.terraform_remote_state.vpc.gce_subnetwork_workers}"
-
-  worker_managed_instance_count_com      = "${var.worker_managed_instance_count_com}"
-  worker_managed_instance_count_com_free = "${var.worker_managed_instance_count_com_free}"
-  worker_managed_instance_count_org      = "${var.worker_managed_instance_count_org}"
-
-  worker_config_com = <<EOF
-### worker.env
-${file("${path.module}/worker.env")}
-### config/worker-com.env
-${file("${path.module}/config/worker-com.env")}
-
-export TRAVIS_WORKER_GCE_SUBNETWORK=jobs-com
-export TRAVIS_WORKER_HARD_TIMEOUT=120m
-export TRAVIS_WORKER_QUEUE_NAME=builds.gce
-export TRAVIS_WORKER_TRAVIS_SITE=com
-
-export TRAVIS_WORKER_BUILD_TRACE_S3_BUCKET=${module.aws_iam_user_s3_com.bucket}
-export AWS_ACCESS_KEY_ID=${module.aws_iam_user_s3_com.id}
-export AWS_SECRET_ACCESS_KEY=${module.aws_iam_user_s3_com.secret}
-EOF
-
-  worker_config_com_free = <<EOF
-### worker.env
-${file("${path.module}/worker.env")}
-### config/worker-com.env
-${file("${path.module}/config/worker-com.env")}
-
-export TRAVIS_WORKER_QUEUE_NAME=builds.gce-free
-export TRAVIS_WORKER_GCE_SUBNETWORK=jobs-com
-export TRAVIS_WORKER_HARD_TIMEOUT=120m
-export TRAVIS_WORKER_TRAVIS_SITE=com
-
-export TRAVIS_WORKER_BUILD_TRACE_S3_BUCKET=${module.aws_iam_user_s3_com.bucket}
-export AWS_ACCESS_KEY_ID=${module.aws_iam_user_s3_com.id}
-export AWS_SECRET_ACCESS_KEY=${module.aws_iam_user_s3_com.secret}
-EOF
-
-  worker_config_org = <<EOF
-### worker.env
-${file("${path.module}/worker.env")}
-### config/worker-org.env
-${file("${path.module}/config/worker-org.env")}
-
-export TRAVIS_WORKER_QUEUE_NAME=builds.gce
-export TRAVIS_WORKER_GCE_SUBNETWORK=jobs-org
-export TRAVIS_WORKER_TRAVIS_SITE=org
-
-export TRAVIS_WORKER_BUILD_TRACE_S3_BUCKET=${module.aws_iam_user_s3_org.bucket}
-export AWS_ACCESS_KEY_ID=${module.aws_iam_user_s3_org.id}
-export AWS_SECRET_ACCESS_KEY=${module.aws_iam_user_s3_org.secret}
-EOF
+  aws_com_id            = "${module.aws_iam_user_s3_com.id}"
+  aws_com_secret        = "${module.aws_iam_user_s3_com.secret}"
+  aws_com_trace_bucket  = "${module.aws_iam_user_s3_com.bucket}"
+  aws_org_id            = "${module.aws_iam_user_s3_org.id}"
+  aws_org_secret        = "${module.aws_iam_user_s3_org.secret}"
+  aws_org_trace_bucket  = "${module.aws_iam_user_s3_org.bucket}"
+  env                   = "${var.env}"
+  index                 = "${var.index}"
+  k8s_default_namespace = "${var.k8s_default_namespace}"
+  project               = "${var.project}"
+  region                = "us-central1"
 }
 
-resource "google_project_iam_member" "staging_1_workers" {
-  count   = "${length(data.terraform_remote_state.staging_1.workers_service_account_emails)}"
-  project = "${var.project}"
-  role    = "roles/compute.imageUser"
-  member  = "serviceAccount:${element(data.terraform_remote_state.staging_1.workers_service_account_emails, count.index)}"
+module "gke_cluster_1" {
+  source = "../modules/gce_kubernetes"
+
+  cluster_name      = "gce-production-1"
+  default_namespace = "${var.k8s_default_namespace}"
+  network           = "${data.terraform_remote_state.vpc.gce_network_main}"
+  pool_name         = "default"
+  project           = "${var.project}"
+  region            = "us-central1"
+  subnetwork        = "${data.terraform_remote_state.vpc.gce_subnetwork_gke_cluster}"
+
+  node_locations = ["us-central1-b", "us-central1-c"]
+  node_pool_tags = ["gce-workers"]
+  min_node_count = 4
+  max_node_count = 50
+  machine_type   = "c2-standard-4"
 }
 
-resource "google_project_iam_member" "staging_1_warmer" {
-  count   = "${length(data.terraform_remote_state.staging_1.warmer_service_account_emails)}"
-  project = "${var.project}"
-  role    = "roles/compute.imageUser"
-  member  = "serviceAccount:${element(data.terraform_remote_state.staging_1.warmer_service_account_emails, count.index)}"
+// Use these outputs to be able to easily set up a context in kubectl on the local machine.
+output "cluster_host" {
+  value = "${module.gke_cluster_1.host}"
 }
 
-resource "google_project_iam_member" "production_2_workers" {
-  count   = "${length(data.terraform_remote_state.production_2.workers_service_account_emails)}"
-  project = "${var.project}"
-  role    = "roles/compute.imageUser"
-  member  = "serviceAccount:${element(data.terraform_remote_state.production_2.workers_service_account_emails, count.index)}"
+output "cluster_ca_certificate" {
+  value     = "${module.gke_cluster_1.cluster_ca_certificate}"
+  sensitive = true
 }
 
-resource "google_project_iam_member" "production_2_warmer" {
-  count   = "${length(data.terraform_remote_state.production_2.warmer_service_account_emails)}"
-  project = "${var.project}"
-  role    = "roles/compute.imageUser"
-  member  = "serviceAccount:${element(data.terraform_remote_state.production_2.warmer_service_account_emails, count.index)}"
+output "client_certificate" {
+  value     = "${module.gke_cluster_1.client_certificate}"
+  sensitive = true
+}
+
+output "client_key" {
+  value     = "${module.gke_cluster_1.client_key}"
+  sensitive = true
+}
+
+output "context" {
+  value = "${module.gke_cluster_1.context}"
+}
+
+output "workers_service_account_emails" {
+  value = ["${module.gce_worker_group.workers_service_account_emails}"]
+}
+
+module "fair_use_ip_query_report" {
+  source        = "../modules/fair_use_reporting"
+  k8s_namespace = "${var.k8s_default_namespace}"
+}
+
+output "fair_use_ip_query_report_account_json" {
+  value = "${module.fair_use_ip_query_report.fair_use_ip_query_report_account_json}"
 }

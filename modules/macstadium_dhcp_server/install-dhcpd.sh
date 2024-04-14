@@ -3,14 +3,14 @@ set -o errexit
 
 main() {
   #grab the dhcp server package
-  sudo apt-get update
-  sudo apt-get install -y isc-dhcp-server
+  sudo yum install -y dhcp
 
   # Configure dhcpd
   sudo mv "/tmp/dhcpd.conf" "/etc/dhcp/dhcpd.conf"
 
-  # Configure dhcpd defaults
-  sudo mv "/tmp/isc-dhcp-server-defaults" "/etc/default/isc-dhcp-server"
+  # Start and enable the service
+  sudo systemctl enable dhcpd
+  sudo systemctl start dhcpd
 }
 
 main "$@"

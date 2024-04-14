@@ -1,4 +1,6 @@
-variable "deny_target_ip_ranges" {}
+variable "deny_target_ip_ranges" {
+  default = []
+}
 
 variable "env" {
   default = "production"
@@ -54,7 +56,7 @@ terraform {
   }
 }
 
-provider "google" {
+provider "google-beta" {
   project = "${var.project}"
   region  = "${var.region}"
 }
@@ -63,12 +65,13 @@ provider "aws" {}
 provider "heroku" {}
 
 module "gce_net" {
-  source = "../modules/gce_net"
+  source = "../modules/gce_net_workers"
 
-  bastion_config                = "${file("config/bastion.env")}"
-  bastion_image                 = "${var.gce_bastion_image}"
-  deny_target_ip_ranges         = ["${split(",", var.deny_target_ip_ranges)}"]
-  env                           = "${var.env}"
+  bastion_config        = "${file("config/bastion.env")}"
+  bastion_image         = "${var.gce_bastion_image}"
+  deny_target_ip_ranges = ["${var.deny_target_ip_ranges}"]
+  env                   = "${var.env}"
+
   github_users                  = "${var.github_users}"
   heroku_org                    = "${var.gce_heroku_org}"
   index                         = "${var.index}"
@@ -86,11 +89,13 @@ module "gce_net" {
 }
 
 data "google_compute_network" "main" {
-  name = "main"
+  project = "${var.project}"
+  name    = "main"
 }
 
 data "google_compute_network" "default" {
-  name = "default"
+  project = "${var.project}"
+  name    = "default"
 }
 
 resource "google_compute_firewall" "allow_docker_tls" {
@@ -139,6 +144,10 @@ resource "google_compute_firewall" "allow_winrm_to_packer_templates_builds" {
   target_tags   = ["travis-ci-packer-templates"]
 }
 
-output "gce_subnetwork_workers" {
-  value = "${module.gce_net.gce_subnetwork_workers}"
+output "gce_network_main" {
+  value = "${module.gce_net.gce_network_main}"
+}
+
+output "gce_subnetwork_gke_cluster" {
+  value = "${module.gce_net.gce_subnetwork_gke_cluster}"
 }

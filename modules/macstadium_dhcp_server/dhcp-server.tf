@@ -1,9 +1,3 @@
-variable "ssh_host" {}
-variable "ssh_user" {}
-variable "host_id" {}
-variable "index" {}
-variable "jobs_network_subnet" {}
-
 data "template_file" "dhcpd_install" {
   template = "${file("${path.module}/install-dhcpd.sh")}"
 }
@@ -34,61 +28,96 @@ data "template_file" "dhcpd_conf" {
   }
 }
 
-data "template_file" "dhcpd_defaults" {
-  template = "${file("${path.module}/isc-dhcp-server-defaults")}"
+resource "vsphere_virtual_machine" "dhcp_server" {
+  name             = "dhcp-server-${var.index}"
+  folder           = "Internal VMs"
+  resource_pool_id = "${data.vsphere_compute_cluster.cluster.resource_pool_id}"
+  datastore_id     = "${data.vsphere_datastore.datastore.id}"
+
+  num_cpus  = 2
+  memory    = 4096
+  guest_id  = "${data.vsphere_virtual_machine.vanilla_template.guest_id}"
+  scsi_type = "${data.vsphere_virtual_machine.vanilla_template.scsi_type}"
+
+  disk {
+    label            = "disk0"
+    size             = "${data.vsphere_virtual_machine.vanilla_template.disks.0.size}"
+    eagerly_scrub    = "${data.vsphere_virtual_machine.vanilla_template.disks.0.eagerly_scrub}"
+    thin_provisioned = "${data.vsphere_virtual_machine.vanilla_template.disks.0.thin_provisioned}"
+  }
+
+  network_interface {
+    network_id = "${data.vsphere_network.internal.id}"
+  }
+
+  network_interface {
+    network_id     = "${data.vsphere_network.jobs.id}"
+    use_static_mac = true
+    mac_address    = "${var.mac_address}"
+  }
+
+  clone {
+    template_uuid = "${data.vsphere_virtual_machine.vanilla_template.id}"
+
+    customize {
+      network_interface {
+        ipv4_address = "${cidrhost("10.182.64.0/18", 50 + var.index)}"
+        ipv4_netmask = 18
+      }
+
+      network_interface {
+        ipv4_address = "${cidrhost(var.jobs_network_subnet, 10)}"
+        ipv4_netmask = 18
+      }
+
+      linux_options {
+        host_name = "dhcp-server-${var.index}"
+        domain    = "macstadium-us-se-1.travisci.net"
+      }
+
+      ipv4_gateway    = "10.182.64.1"
+      dns_server_list = ["1.1.1.1", "1.0.0.1"]
+      dns_suffix_list = ["vsphere.local"]
+    }
+  }
+
+  wait_for_guest_net_routable = false
+
+  connection {
+    host  = "${self.clone.0.customize.0.network_interface.0.ipv4_address}"
+    user  = "${var.ssh_user}"
+    agent = true
+  }
 }
 
 resource "null_resource" "dhcp_server" {
   triggers {
     install_script_signature = "${sha256(data.template_file.dhcpd_install.rendered)}"
     dhcpd_conf_signature     = "${sha256(data.template_file.dhcpd_conf.rendered)}"
-    dhcpd_defaults_signature = "${sha256(data.template_file.dhcpd_defaults.rendered)}"
     jobs_network_subnet      = "${var.jobs_network_subnet}"
-    name                     = "dhcp_server-${var.index}"
-    host_id                  = "${var.host_id}"
+    host_id                  = "${vsphere_virtual_machine.dhcp_server.id}"
   }
 
   connection {
-    host  = "${var.ssh_host}"
+    host  = "${vsphere_virtual_machine.dhcp_server.clone.0.customize.0.network_interface.0.ipv4_address}"
     user  = "${var.ssh_user}"
     agent = true
   }
 
-  # NOTE: terraform 0.9.7 introduced a validator for this provisioner that does
-  # not play well with `content` and `data.template_file` (maybe?).  See:
-  # https://github.com/hashicorp/terraform/issues/15177
-  #   provisioner "file"  {
-  #     content     = "${data.template_file.worker_upstart.rendered}"
-  #     destination = "/tmp/init-travis-worker-${var.env}.conf"
-  #   }
-  # HACK{
-  provisioner "remote-exec" {
-    inline = [
-      <<EOF
-cat >/tmp/dhcpd.conf.b64 <<EONESTEDF
-${base64encode(data.template_file.dhcpd_conf.rendered)}
-EONESTEDF
-base64 --decode </tmp/dhcpd.conf.b64 >/tmp/dhcpd.conf
-EOF
-      ,
-    ]
+  provisioner "file" {
+    content     = "${data.template_file.dhcpd_conf.rendered}"
+    destination = "/tmp/dhcpd.conf"
   }
-
-  provisioner "remote-exec" {
-    inline = [
-      <<EOF
-cat >/tmp/isc-dhcp-server-defaults.b64 <<EONESTEDF
-${base64encode(data.template_file.dhcpd_defaults.rendered)}
-EONESTEDF
-base64 --decode < /tmp/isc-dhcp-server-defaults.b64 >/tmp/isc-dhcp-server-defaults
-EOF
-      ,
-    ]
-  }
-
-  # }HACK
 
   provisioner "remote-exec" {
     inline = ["${data.template_file.dhcpd_install.rendered}"]
   }
+}
+
+resource "aws_route53_record" "dhcp_server" {
+  zone_id = "${var.travisci_net_external_zone_id}"
+  name    = "dhcp-server-${var.index}.macstadium-us-se-1.travisci.net"
+  type    = "A"
+  ttl     = 300
+  records = ["${vsphere_virtual_machine.dhcp_server.clone.0.customize.0.network_interface.0.ipv4_address}"]
 }
